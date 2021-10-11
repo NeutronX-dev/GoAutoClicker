@@ -1,104 +1,106 @@
 package main
 
-/*
-	unsafe.Pointer(p interface{}): Returns a pointer that can be used as a parameter for syscall.Proc.Call.
-*/
-
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 
-	"github.com/gen2brain/dlgs"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 	"github.com/go-vgo/robotgo"
-	"github.com/pterm/pterm"
 )
 
-var AutoClickerEnabled bool = false
-
-func TimeUnitPromp(p *pterm.ProgressbarPrinter) (time.Duration, string) {
+func StrToTimeUnit(unitSTR string) (error, time.Duration) {
 	var Unit time.Duration
-	item, _, err := dlgs.List("Time Unit", "Select a time unit from the List:", []string{"Second", "Millisecond", "Nanosecond"})
-	if err != nil {
-		panic(err)
-	}
-	switch item {
+	switch unitSTR {
 	case "Second":
 		Unit = time.Second
-		pterm.Success.Println("Set Time Unit to 'Second'")
 	case "Millisecond":
 		Unit = time.Millisecond
-		pterm.Success.Println("Set Time Unit to 'Millisecond'")
 	case "Nanosecond":
 		Unit = time.Nanosecond
-		pterm.Success.Println("Set Time Unit to 'Nanosecond'")
 	default:
-		pterm.Warning.Println("No Time Unit selected: Selected 'Millisecond' by Default")
-		item = "Millisecond"
-		Unit = time.Millisecond
+		return fmt.Errorf("error parsing time unit"), time.Second
 	}
-	return Unit, item
+	return nil, Unit
 }
 
-func TimeInterval(p *pterm.ProgressbarPrinter, unitStr string) int {
-	res, _, err := dlgs.Entry("Interval", fmt.Sprintf("How many clicks per %v", unitStr), "")
-	if err != nil {
-		panic(err)
-	}
-
-	if res == "exit" {
-		os.Exit(0)
-	}
-
-	Parsed, err := strconv.Atoi(res)
-	if err != nil {
-		pterm.Error.Println("Invalid Number. Prompting again for a valid Number")
-		return TimeInterval(p, unitStr)
-	}
-	pterm.Success.Printf("Set clicks to 1 every %v.", unitStr)
-	return Parsed
+type NeutronXAutoClicker struct {
+	Started  bool
+	unit     time.Duration
+	interval int
 }
 
-func AutoClicker(unit time.Duration, clicks int) {
+func (clickr *NeutronXAutoClicker) Start() {
+	clickr.Started = true
+}
+
+func (clickr *NeutronXAutoClicker) AutoClicker() {
 	for {
-		if AutoClickerEnabled {
+		if clickr.Started {
 			robotgo.MouseClick()
-			time.Sleep(unit * time.Duration(clicks))
+			time.Sleep(clickr.unit * time.Duration(clickr.interval))
 		} else {
 			time.Sleep(time.Millisecond * 1)
 		}
 	}
 }
 
+func (clickr *NeutronXAutoClicker) Stop() {
+	clickr.Started = false
+}
+
 func main() {
-	pterm.DefaultHeader.Println("NeutronX Auto Clicker")
-	p, _ := pterm.DefaultProgressbar.WithTotal(2).WithTitle("Set-up").Start()
-	timeUnit, timeUnit_str := TimeUnitPromp(p)
-	p.Increment()
-	timeInterval := TimeInterval(p, timeUnit_str)
-	p.Increment()
-	for i := 0; i < 10; i++ {
-		robotgo.MouseClick()
-		time.Sleep(timeUnit * time.Duration(timeInterval))
-	}
-	fmt.Println(("\033[H\033[2J"))
-	pterm.DefaultHeader.Println("NeutronX Auto Clicker")
-	pterm.DefaultTable.WithHasHeader().WithData(pterm.TableData{
-		{"Key", "Value"},
-		{"Time Unit", timeUnit_str},
-		{"Time Interval", strconv.Itoa(timeInterval)},
-		{"CPS", "1 Click Every " + timeUnit_str},
-	}).Render()
-	go AutoClicker(timeUnit, timeInterval)
-	for {
-		onkey := robotgo.AddEvent("`")
-		if onkey {
-			if AutoClickerEnabled {
-				AutoClickerEnabled = false
+	myApp := app.New()
+	myWindow := myApp.NewWindow("NeutronX Auto Clicker")
+	myWindow.Resize(fyne.NewSize(620, 320))
+	SelectedEntry := widget.NewSelectEntry([]string{"Second", "Millisecond", "Nanosecond"})
+	ClickingInterval := widget.NewEntry()
+	KeyBind := widget.NewEntry()
+
+	SelectedEntry.PlaceHolder = "Choose an Interval Unit"
+	form := &widget.Form{
+		Items: []*widget.FormItem{
+			{Text: "Time Unit", Widget: SelectedEntry}},
+		OnSubmit: func() {
+			interval, err := strconv.Atoi(ClickingInterval.Text)
+			if err != nil {
+				dialog.ShowError(err, myWindow)
 			} else {
-				AutoClickerEnabled = true
+				err, timeUnit := StrToTimeUnit(SelectedEntry.Text)
+				if err != nil {
+					dialog.ShowError(err, myWindow)
+				} else {
+					if len(KeyBind.Text) == 1 {
+						myWindow.Resize(fyne.NewSize(20, 20))
+						dialog.ShowInformation("Started", fmt.Sprintf("To toggle press \"%v\".", KeyBind.Text), myWindow)
+						var AutoClicker NeutronXAutoClicker = NeutronXAutoClicker{unit: timeUnit, interval: interval}
+
+						AutoClicker.Stop()
+						go AutoClicker.AutoClicker()
+						for {
+							onkey := robotgo.AddEvent(KeyBind.Text)
+							if onkey {
+								if AutoClicker.Started {
+									AutoClicker.Started = false
+								} else {
+									AutoClicker.Started = true
+								}
+							}
+						}
+
+					} else {
+						dialog.ShowError(fmt.Errorf("invalid keybind (must be 1 characters long)"), myWindow)
+					}
+				}
 			}
-		}
+		},
 	}
+	form.Append("Time Interval", ClickingInterval)
+	form.Append("Keybind", KeyBind)
+
+	myWindow.SetContent(form)
+	myWindow.ShowAndRun()
 }
